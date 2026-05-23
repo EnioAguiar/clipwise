@@ -4,7 +4,7 @@
 
 ClipWise automatically finds the best moments in streams, podcasts, and long videos using AI. It transcribes the video, extracts audio energy peaks, and uses AI (Gemini 2.5 Flash) to rank moments by engagement potential.
 
-Built inspired by [podcli](https://github.com/podstack/podcli) but with a different approach — focused on web dashboard, API-first, and optimized for content creators who want to quickly generate TikTok/Shorts clips from their recordings.
+Built inspired by [podcli](https://github.com/nmbrthirteen/podcli) but with a different approach — focused on web dashboard, API-first, and optimized for content creators who want to quickly generate TikTok/Shorts clips from their recordings.
 
 ## Features
 
