@@ -1,8 +1,8 @@
 """
 Moment ranking service — combines energy + transcript to rank and filter moments.
 
-Uses Grok AI for intelligent selection (per D-01 to D-08 from CONTEXT.md).
-Falls back to energy-only ranking if Grok is unavailable.
+Uses Gemini AI for intelligent selection.
+Falls back to energy-only ranking if Gemini is unavailable.
 """
 
 import json
@@ -59,19 +59,25 @@ def rank_moments(
         else:
             energy_data = []
 
-    # Use Grok if enabled and available
+    # Use Gemini if enabled and available
     if use_llm:
         try:
+            print(f"[RANK] Starting moment ranking with config: {config}")
             result = call_gemini_moment_selection(transcript_data, energy_data, config)
-            print(f"[RANK] Gemini returned {len(result.get('moments', []))} moments")
-            # Post-process: filter by duration, sort by score
-            return _filter_and_sort_moments(result, config)
+            raw_count = len(result.get("moments", []))
+            print(f"[RANK] Gemini returned {raw_count} raw moments")
+            # Post-process: filter by span, sort by score
+            filtered_result = _filter_and_sort_moments(result, config)
+            final_count = len(filtered_result.get("moments", []))
+            print(f"[RANK] After filtering: {final_count} valid moments")
+            return filtered_result
         except RuntimeError as e:
-            # Grok failed — log and fall back
-            print(f"Grok API unavailable: {e}, using energy-only fallback")
+            # Gemini failed — log and fall back
+            print(f"[RANK] Gemini failed: {e}, using energy-only fallback")
             pass
 
     # Fallback: energy-only ranking
+    print(f"[RANK] Using energy-only fallback")
     return fallback_energy_ranking(energy_data, transcript_data, config)
 
 

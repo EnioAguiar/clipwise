@@ -37,6 +37,8 @@ def call_gemini_moment_selection(
         raise RuntimeError("GEMINI_API_KEY not set — cannot call Gemini API")
 
     prompt = _build_moment_prompt(transcript_data, energy_data, config)
+    
+    print(f"[GEMINI] Sending request with config: min={config.get('min_clip_duration', 30)}, max={config.get('max_clip_duration', 60)}, target={config.get('target_clips', 10)}")
 
     headers = {
         "x-goog-api-key": GEMINI_API_KEY,
@@ -57,21 +59,33 @@ def call_gemini_moment_selection(
         # Extract text from Gemini response
         text = result["candidates"][0]["content"]["parts"][0]["text"]
         print(f"[GEMINI] Raw response length: {len(text)} chars")
+        print(f"[GEMINI] Raw response (first 500 chars): {text[:500]}")
         
         # Parse JSON from text (Gemini might wrap in ```json)
         text = text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
             text = "\n".join(lines[1:-1])
+            print(f"[GEMINI] Stripped markdown wrapper, JSON length: {len(text)}")
         
         parsed = json.loads(text)
-        moments_count = len(parsed.get("moments", []))
-        print(f"[GEMINI] Parsed moments count: {moments_count}")
+        moments = parsed.get("moments", [])
+        moments_count = len(moments)
+        print(f"[GEMINI] Parsed {moments_count} moments")
+        
+        # Log score details for first 3 moments
+        for i, m in enumerate(moments[:3]):
+            scores = m.get("scores", {})
+            total = m.get("total_score", 0)
+            span = m.get("end", 0) - m.get("start", 0)
+            print(f"[GEMINI] Moment {i+1}: scores={scores}, total_score={total}, span={span:.1f}s")
+        
         return parsed
         
     except requests.exceptions.Timeout:
         raise RuntimeError("Gemini API timeout after 120s")
     except Exception as e:
+        print(f"[GEMINI] Error: {e}")
         raise RuntimeError(f"Gemini API failed: {e}") from e
 
 
@@ -129,10 +143,15 @@ MOMENT SELECTION (think like a TikTok editor):
 - Search the ENTIRE timeline and diversify the picks. Do not cluster all clips in one section.
 
 Score each moment on 4 dimensions (1-5 each):
-- hook: Grabs attention in first 3 seconds?
-- standalone: Makes sense without episode context?
-- relevance: Matters to target audience?
-- quotability: Memorable, shareable phrasing?
+- hook: Grabs attention in first 3 seconds? (1=weak, 5=strong)
+- standalone: Makes sense without episode context? (1=needs context, 5=standalone)
+- relevance: Matters to target audience? (1=irrelevant, 5=highly relevant)
+- quotability: Memorable, shareable phrasing? (1=forgettable, 5=shareable)
+
+SCORE CALCULATION (IMPORTANT):
+- total_score = hook + standalone + relevance + quotability
+- Maximum possible total_score = 20 (4 dimensions × 5 max each)
+- Example: scores={{"hook": 5, "standalone": 4, "relevance": 4, "quotability": 3}} → total_score=16
 
 Classify each as: guest_story | technical_insight | hot_take | market_landscape | business_strategy
 
