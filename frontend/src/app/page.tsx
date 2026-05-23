@@ -50,19 +50,7 @@ export default function Home() {
   const [processingState, setProcessingState] = useState<ProcessingState>('idle')
   const [currentStep, setCurrentStep] = useState<string>('')
   const [progress, setProgress] = useState(0)
-  const [config, setConfig] = useState<ProcessingConfig>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('clipwise-config')
-      if (saved) {
-        try {
-          return JSON.parse(saved)
-        } catch {
-          return DEFAULT_CONFIG
-        }
-      }
-    }
-    return DEFAULT_CONFIG
-  })
+  const [config, setConfig] = useState<ProcessingConfig>(DEFAULT_CONFIG)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [error, setError] = useState<string | null>(null)
   const [moments, setMoments] = useState<Moment[]>([])
@@ -73,6 +61,7 @@ export default function Home() {
   const [videoSrc, setVideoSrc] = useState<string | null>(null)
   const [energyData, setEnergyData] = useState<EnergyPoint[]>([])
   const [videoDuration, setVideoDuration] = useState<number>(0)
+  const [extractionComplete, setExtractionComplete] = useState(false)
   const [opusStatus, setOpusStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle')
   const [opusJobId, setOpusJobId] = useState<string | null>(null)
 
@@ -242,25 +231,56 @@ export default function Home() {
       }
       setVideoId(videoId)
 
-      // Step 2: Process chain (transcribe -> energy -> rank)
+      // Step 2: Extract (transcribe + energy)
       setProcessingState('transcribing')
       setCurrentStep('Transcrevendo...')
       setProgress(30)
       addLog('Iniciando transcrição...')
 
-      setProcessingState('analyzing')
-      setCurrentStep('Processando...')
-      setProgress(60)
-      addLog('Analisando momentos...')
+      const extractRes = await fetch(`${API_BASE}/extract`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: activeTab === 'youtube' ? 'youtube' : 'upload',
+          file_id: videoId,
+          youtube_url: activeTab === 'youtube' ? youtubeUrl : '',
+        })
+      })
 
-      console.log('[DEBUG] videoId before process:', videoId)
-      console.log('[DEBUG] Process request body:', JSON.stringify({
-        source: activeTab === 'youtube' ? 'youtube' : 'upload',
-        file_id: videoId,
-        youtube_url: activeTab === 'youtube' ? youtubeUrl : '',
-        config: config
-      }))
+      // Update UI to show energy extraction phase (backend is doing this now)
+      setCurrentStep('Extraindo energia...')
+      setProgress(40)
+      addLog('Extraindo energia...', 'info')
 
+      if (!extractRes.ok) throw new Error('Extraction failed')
+      setVideoId(videoId)
+      setExtractionComplete(true)
+
+      // Brief pause to show energy extraction completing
+      setProgress(45)
+      addLog('Finalizando...', 'info')
+
+      setTimeout(() => {
+        setProgress(50)
+        addLog('Extração completa! Ajuste as configurações.', 'success')
+      }, 300)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      addLog(`Erro: ${msg}`, 'error')
+      setError(msg)
+      setProcessingState('error')
+    }
+  }
+
+  const rankMoments = async () => {
+    if (!videoId) return
+    setError(null)
+    setProcessingState('analyzing')
+    setCurrentStep('Processando...')
+    setProgress(60)
+    addLog('Analisando momentos com IA...')
+
+    try {
       const processRes = await fetch(`${API_BASE}/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -289,15 +309,15 @@ export default function Home() {
       setCurrentStep('Completo')
       setProgress(100)
       addLog('Processamento completo!', 'success')
-      } catch (err) {
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       addLog(`Erro: ${msg}`, 'error')
       setError(msg)
       setProcessingState('error')
-      }
+    }
   }
 
-  const showConfigPanel = processingState === 'idle'
+  const showConfigPanel = processingState === 'transcribing'
 
   return (
     <main className="min-h-screen p-8">
@@ -543,10 +563,22 @@ export default function Home() {
 
           {/* Config Panel - shown when no moments but config is needed */}
           {showConfigPanel && (
-            <ConfigPanel
-              config={config}
-              onConfigChange={handleConfigChange}
-            />
+            <section className="space-y-4">
+              <ConfigPanel
+                config={config}
+                onConfigChange={handleConfigChange}
+              />
+              <div className="flex justify-end">
+                <Button
+                  onClick={rankMoments}
+                  disabled={!extractionComplete}
+                  className="flex items-center gap-2"
+                >
+                  <Play className="w-4 h-4" />
+                  Processar com IA
+                </Button>
+              </div>
+            </section>
           )}
 
           {/* Complete State - no moments yet */}

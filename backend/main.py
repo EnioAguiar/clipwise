@@ -1,14 +1,18 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import os
 import httpx
 import json
+from dotenv import load_dotenv
 
 from services.storage import save_upload, save_youtube, get_video_info, VIDEO_DIR
 from services.energy import get_energy_profile, save_energy_data
 from services.moment_ranker import rank_moments, save_moments
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = FastAPI(title="ClipWise API", version="0.1.0")
 
@@ -32,10 +36,11 @@ class EnergyRequest(BaseModel):
     segments: list[dict] = []  # optional pre-segmented data
 
 class ProcessingConfig(BaseModel):
-    min_clip_duration: int = 30
-    max_clip_duration: int = 60
-    target_clips: int = 10
+    min_clip_duration: int = Field(default=30, alias="minDuration")
+    max_clip_duration: int = Field(default=60, alias="maxDuration")
+    target_clips: int = Field(default=10, alias="targetClips")
     format: str = "vertical"
+    mode: str = "auto"
 
 class Moment(BaseModel):
     rank: int
@@ -212,6 +217,60 @@ class ProcessRequest(BaseModel):
     file_id: str = ""  # for upload
     youtube_url: str = ""  # for youtube
     config: ProcessingConfig = ProcessingConfig()
+
+
+@app.post("/extract")
+async def extract_video(req: ProcessRequest):
+    """
+    Chains: upload/youtube -> transcribe -> energy
+    Does NOT rank moments - that comes after config.
+    """
+    import logging
+    import traceback
+    logger = logging.getLogger("uvicorn")
+    logger.warning(f"[EXTRACT] Received request: source={req.source}, file_id={req.file_id}")
+
+    try:
+        if req.source == "youtube":
+            result = save_youtube(req.youtube_url)
+            video_id = result["video_id"]
+        else:
+            video_id = req.file_id
+
+        info = get_video_info(video_id)
+        if not info:
+            raise HTTPException(status_code=404, detail="Video not found")
+        video_path = info["path"]
+        logger.warning(f"[EXTRACT] video_path={video_path}")
+
+        # Step 1: Transcribe
+        from services.transcription import transcribe_file
+        transcript_path = f"/tmp/clipwise/{video_id}/transcript.json"
+        if not os.path.exists(transcript_path):
+            logger.warning(f"[EXTRACT] Starting transcription...")
+            transcribe_file(video_path)
+            logger.warning(f"[EXTRACT] Transcription complete")
+
+        # Step 2: Extract energy
+        energy_path = f"/tmp/clipwise/{video_id}/energy.json"
+        if not os.path.exists(energy_path):
+            logger.warning(f"[EXTRACT] Starting energy extraction...")
+            energy_profile = get_energy_profile(video_path)
+            save_energy_data(video_id, energy_profile["energy_data"], energy_profile["segment_scores"], energy_profile["peak_times"])
+            logger.warning(f"[EXTRACT] Energy extraction complete")
+
+        return {
+            "video_id": video_id,
+            "status": "extracted",
+            "transcript_ready": os.path.exists(transcript_path),
+            "energy_ready": os.path.exists(energy_path),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[EXTRACT] Error: {e}")
+        logger.error(f"[EXTRACT] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
 
 
 @app.post("/process")

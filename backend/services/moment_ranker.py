@@ -63,6 +63,7 @@ def rank_moments(
     if use_llm:
         try:
             result = call_grok_moment_selection(transcript_data, energy_data, config)
+            print(f"[RANK] Groq returned {len(result.get('moments', []))} moments")
             # Post-process: filter by duration, sort by score
             return _filter_and_sort_moments(result, config)
         except RuntimeError as e:

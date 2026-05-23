@@ -51,10 +51,14 @@ def call_grok_moment_selection(
             temperature=0.3,
         )
         content = chat_completion.choices[0].message.content
+        print(f"[GROQ] Raw response length: {len(content)} chars")
+        print(f"[GROQ] First 500 chars: {content[:500]}")
         if content.strip().startswith("```"):
             lines = content.strip().split("\n")
             content = "\n".join(lines[1:-1])
-        return json.loads(content)
+        result = json.loads(content)
+        print(f"[GROQ] Parsed moments count: {len(result.get('moments', []))}")
+        return result
     except Exception as e:
         raise RuntimeError(f"Groq API failed: {e}") from e
 
@@ -148,8 +152,8 @@ def _pack_energy_for_prompt(energy_data: list[dict]) -> str:
     """Pack energy peaks into readable format for prompt."""
     if not energy_data:
         return "No energy data available"
-    # Sort by time and take top 20
-    sorted_energy = sorted(energy_data, key=lambda e: e.get("time", 0))
+    # Sort by rms_db descending (highest energy first) and take top 20
+    sorted_energy = sorted(energy_data, key=lambda e: e.get("rms_db", -999), reverse=True)
     top_peaks = sorted_energy[:20]
     return "\n".join([f"[{e.get('time', 0):.1f}s] {e.get('rms_db', 0):.1f}dB" for e in top_peaks])
 
