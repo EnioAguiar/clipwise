@@ -128,7 +128,11 @@ export default function Home() {
     try {
       const momentsToSend = moments
         .filter((_, i) => selectedMoments.has(i))
-        .map(m => ({ start: m.start, end: m.end }))
+        .map(m => {
+          // Use the full moment range (start to end) which includes all segments
+          // The actual content is 52s but we send the full span for Opus to process
+          return { start: m.start, end: m.end }
+        })
 
       const API_BASE = 'http://localhost:8000'
 
@@ -162,8 +166,11 @@ export default function Home() {
 
   const jumpToTimestamp = (time: number) => {
     if (videoRef.current) {
+      videoRef.current.pause()
       videoRef.current.currentTime = time
-      videoRef.current.play()
+      videoRef.current.play().catch(() => {
+        // Ignore play interruption errors - happens on rapid clicks
+      })
     }
   }
 

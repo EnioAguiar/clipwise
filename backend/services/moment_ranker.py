@@ -9,7 +9,7 @@ import json
 import os
 from typing import Optional
 
-from .grok_client import call_grok_moment_selection, fallback_energy_ranking
+from .gemini_client import call_gemini_moment_selection, fallback_energy_ranking
 from .energy import get_energy_profile, save_energy_data
 
 VIDEO_DIR = "/tmp/clipwise"
@@ -62,8 +62,8 @@ def rank_moments(
     # Use Grok if enabled and available
     if use_llm:
         try:
-            result = call_grok_moment_selection(transcript_data, energy_data, config)
-            print(f"[RANK] Groq returned {len(result.get('moments', []))} moments")
+            result = call_gemini_moment_selection(transcript_data, energy_data, config)
+            print(f"[RANK] Gemini returned {len(result.get('moments', []))} moments")
             # Post-process: filter by duration, sort by score
             return _filter_and_sort_moments(result, config)
         except RuntimeError as e:
@@ -77,24 +77,34 @@ def rank_moments(
 
 def _filter_and_sort_moments(result: dict, config: dict) -> dict:
     """
-    Post-process Grok output:
-    - Filter moments to valid duration range
+    Post-process Gemini output:
+    - Filter moments by SPAN (end - start), not segment sum
     - Remove overlaps (higher score wins)
     - Sort by total_score descending
     - Return top N
+
+    IMPORTANT: We validate SPAN, not the "duration" field (which is segment sum).
+    The Opus API receives start/end, so span must respect min/max.
     """
     min_dur = config.get("min_clip_duration", 30)
     max_dur = config.get("max_clip_duration", 60)
     target = config.get("target_clips", 10)
 
     moments = result.get("moments", [])
-
-    # Filter by duration
+    
+    # Filter by SPAN (end - start), not segment sum duration
     valid_moments = []
+    rejected = 0
     for m in moments:
-        dur = m.get("duration", 0)
-        if min_dur <= dur <= max_dur:
+        span = m.get("end", 0) - m.get("start", 0)
+        if min_dur <= span <= max_dur:
             valid_moments.append(m)
+        else:
+            rejected += 1
+            print(f"[RANK] Rejected moment: span={span:.1f}s (must be {min_dur}-{max_dur}s)")
+    
+    if rejected:
+        print(f"[RANK] Rejected {rejected} moments for span outside valid range")
 
     # Remove overlaps
     filtered = []
