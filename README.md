@@ -270,6 +270,6 @@ MIT
 
 ## Acknowledgments
 
-- Inspired by [podcli](https://github.com/podstack/podcli) — the gold standard for podcast clip tools
+- Inspired by [podcli](https://github.com/nmbrthirteen/podcli) — the gold standard for podcast clip tools
 - Transcription powered by [Whisper](https://github.com/openai/whisper) from OpenAI
 - AI ranking powered by [Google Gemini](https://ai.google.dev/)
