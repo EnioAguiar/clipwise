@@ -73,14 +73,17 @@ def _build_moment_prompt(transcript_data: dict, energy_data: list[dict], config:
     - relevance: Matters to target audience?
     - quotability: Memorable, shareable phrasing?
 
-    Duration rules:
-    - Target: {TARGET_CLIP_DURATION_MIN}-{TARGET_CLIP_DURATION_MAX} seconds
-    - Maximum: {MAX_CLIP_DURATION} seconds (hard limit)
-    - Minimum: {MIN_CLIP_DURATION} seconds
+    Duration rules (CRITICAL):
+    - Target: {min}-{max} seconds (this is the viral sweet spot)
+    - Maximum: {max} seconds (absolute hard limit — clips longer will be rejected)
+    - Minimum: {min} seconds (too short = no payoff, will be rejected)
+    - SHORTER IS BETTER. A punchy 25s clip outperforms a 40s clip every time.
+    - If a thought takes longer than {max}s, use segments to cut the filler in the middle
     """
     min_dur = config.get("min_clip_duration", 30)
     max_dur = config.get("max_clip_duration", 60)
     target = config.get("target_clips", 10)
+    target_dur = min_dur  # sweet spot between min and max
 
     # Pack transcript into markdown (similar to transcript_packer.py)
     transcript_md = _pack_transcript_for_prompt(transcript_data)
@@ -88,36 +91,48 @@ def _build_moment_prompt(transcript_data: dict, energy_data: list[dict], config:
     # Add energy peaks
     energy_md = _pack_energy_for_prompt(energy_data)
 
-    return f"""Analyze this video transcript and energy data to find the best moments for short-form clips.
+    return f"""You are a viral clip editor for TikTok and YouTube Shorts. Find the {target} most scroll-stopping moments in this video transcript.
 
-## Video Duration: {transcript_data.get('duration', 0):.1f} seconds
+IMPORTANT: Return ONLY valid JSON. No markdown, no explanation, no code fences.
 
-## Transcript:
-{transcript_md}
+TIMESTAMP FORMAT: All timestamps in the transcript are in SECONDS (e.g., [123.4s]).
+All timestamps you return MUST be in SECONDS as numbers (e.g., 123.4), NOT minutes:seconds.
 
-## Energy Peaks (top 20 loudest moments):
-{energy_md}
+DURATION RULES (CRITICAL):
+- Target: {target_dur}-{max_dur} seconds (this is the viral sweet spot)
+- Maximum: {max_dur} seconds (absolute hard limit — clips longer will be REJECTED)
+- Minimum: {min_dur} seconds (too short = no payoff, will be REJECTED)
+- SHORTER IS BETTER. A punchy 25s clip outperforms a 40s clip every time.
+- If a thought takes longer than {max_dur}s, use segments to cut the filler in the middle
 
-## Configuration:
-- Min clip duration: {min_dur}s
-- Max clip duration: {max_dur}s
-- Target clips: {target}
+CUTTING RULES (CRITICAL):
+- Cut TIGHT. Every second must earn its place.
+- Start at the exact moment the hook hits — no preamble, no "so", no "well"
+- End the MOMENT the point lands with a complete thought — don't trail off
+- NEVER cut mid-sentence or mid-thought. The viewer must feel closure.
+- The last sentence must feel like a natural ending, a punchline, or a mic-drop
+- If there's filler/tangent in the middle, use multiple segments to skip it
+- A 30s clip with zero dead weight beats a {max_dur}s clip with fluff
 
-## Selection Criteria (score 1-5 each):
-- **hook**: Grabs attention in first 3 seconds?
-- **standalone**: Makes sense without episode context?
-- **relevance**: Matters to target audience?
-- **quotability**: Memorable, shareable phrasing?
+MOMENT SELECTION (think like a TikTok editor):
+- Would YOU stop scrolling for this? If no, skip it.
+- First 3 seconds must HOOK — a bold claim, shocking number, or provocative question
+- Must make complete sense standalone — no "as I mentioned" or "going back to"
+- Must end on a COMPLETE THOUGHT — sentence boundary, natural pause, or mic-drop moment
+- Single focused idea — one concept, fully delivered, no loose threads
+- Prioritize: controversial takes, surprising numbers, founder war stories, "wait what?" moments, emotional peaks
+- Skip: generic advice, obvious statements, context-dependent references
+- Search the ENTIRE timeline and diversify the picks. Do not cluster all clips in one section.
 
-## Rules:
-- Start at exact moment hook hits — no preamble
-- End on complete thought — sentence boundary, mic-drop moment
-- If filler in middle, use segments array to cut it out
-- SHORTER IS BETTER
-- Diversify picks across entire timeline (don't cluster in one section)
-- Avoid overlapping moments — if overlap occurs, higher-scored moment wins
+Score each moment on 4 dimensions (1-5 each):
+- hook: Grabs attention in first 3 seconds?
+- standalone: Makes sense without episode context?
+- relevance: Matters to target audience?
+- quotability: Memorable, shareable phrasing?
 
-## Output Format (return ONLY valid JSON):
+Classify each as: guest_story | technical_insight | hot_take | market_landscape | business_strategy
+
+Return this exact JSON structure:
 {{
   "moments": [
     {{
@@ -128,10 +143,31 @@ def _build_moment_prompt(transcript_data: dict, energy_data: list[dict], config:
       "scores": {{"hook": 5, "standalone": 4, "relevance": 4, "quotability": 3}},
       "transcript_snippet": "The key quote from this moment",
       "segments": [{{"start": 123.4, "end": 140.0}}, {{"start": 145.2, "end": 168.4}}],
-      "content_type": "guest_story|technical_insight|hot_take|market_landscape|business_strategy"
+      "content_type": "guest_story"
     }}
   ]
 }}
+
+SEGMENTS RULES:
+- "segments" is an array of keep-ranges within the clip. Use it to CUT OUT dead weight.
+- If the moment is clean with no filler, use a single segment: [{{"start": X, "end": Y}}]
+- If there's a ramble/tangent/filler in the middle, split into multiple segments that skip it
+- Each segment must start and end on sentence boundaries
+- The rendered video will stitch these segments together seamlessly
+- "duration" = total kept time (sum of all segment lengths), NOT end - start
+
+Rules:
+- Final clip duration (sum of segments) MUST be {min_dur}-{max_dur} seconds (target {target_dur}-{max_dur}s)
+- Each segment must start and end on COMPLETE SENTENCES — never mid-thought
+- The LAST segment must end on a sentence that feels like a natural conclusion
+- Must make sense standalone when stitched together
+- Sort clips by timestamp order
+
+Transcript:
+{transcript_md}
+
+Energy Peaks (top 20 loudest moments):
+{energy_md}
 
 Return JSON only — no markdown, no explanation."""
 

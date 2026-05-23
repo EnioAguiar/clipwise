@@ -208,7 +208,7 @@ export default function Home() {
         })
         if (!ytRes.ok) throw new Error('YouTube download failed')
         const ytData = await ytRes.json()
-        videoId = ytData.video_id
+        videoId = ytData.file_id
         addLog('YouTube baixado com sucesso', 'success')
         setProgress(20)
       } else {
@@ -273,7 +273,8 @@ export default function Home() {
   }
 
   const rankMoments = async () => {
-    if (!videoId) return
+    console.log('[RANK] videoId:', videoId, 'config:', config)
+    if (!videoId) { console.log('[RANK] early return - no videoId'); return }
     setError(null)
     setProcessingState('analyzing')
     setCurrentStep('Processando...')
@@ -570,7 +571,7 @@ export default function Home() {
               />
               <div className="flex justify-end">
                 <Button
-                  onClick={rankMoments}
+                  onClick={() => { console.log('[CLICK] Processar com IA clicked, extractionComplete=', extractionComplete); rankMoments(); }}
                   disabled={!extractionComplete}
                   className="flex items-center gap-2"
                 >

@@ -232,8 +232,11 @@ async def extract_video(req: ProcessRequest):
 
     try:
         if req.source == "youtube":
-            result = save_youtube(req.youtube_url)
-            video_id = result["video_id"]
+            if req.file_id:
+                video_id = req.file_id  # Already downloaded by /youtube
+            else:
+                result = save_youtube(req.youtube_url)
+                video_id = result["file_id"]
         else:
             video_id = req.file_id
 
@@ -286,10 +289,13 @@ async def process_video(req: ProcessRequest):
     logger.warning(f"[PROCESS] Received request: source={req.source}, file_id={req.file_id}, youtube_url={req.youtube_url}")
 
     try:
-        # Step 1: Get video path (upload already done, or download youtube)
+        # Step 1: Get video path (upload already done, or download youtube if needed)
         if req.source == "youtube":
-            result = save_youtube(req.youtube_url)
-            video_id = result["video_id"]
+            if req.file_id:
+                video_id = req.file_id  # Already downloaded by /extract
+            else:
+                result = save_youtube(req.youtube_url)
+                video_id = result["file_id"]
         else:
             video_id = req.file_id
 

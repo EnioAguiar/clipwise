@@ -1,5 +1,5 @@
 """
-Transcription service using Faster Whisper.
+Transcription service using OpenAI Whisper.
 
 Provides word-level timestamps, segment structure, and JSON output saved to
 /tmp/clipwise/<video_id>/ for integration with the ClipWise pipeline.
@@ -7,9 +7,8 @@ Provides word-level timestamps, segment structure, and JSON output saved to
 
 import os
 import json
-from typing import Optional
-from faster_whisper import WhisperModel
-
+import torch
+import whisper
 
 VIDEO_DIR = "/tmp/clipwise"
 
@@ -17,75 +16,62 @@ VIDEO_DIR = "/tmp/clipwise"
 def transcribe_file(
     video_path: str,
     model_size: str = "base",
-    language: Optional[str] = None,
+    language: str = None,
 ) -> dict:
-    """
-    Transcribe a video/audio file with word-level timestamps.
-
-    Args:
-        video_path: Path to video/audio file
-        model_size: Whisper model size ("tiny", "base", "small", "medium", "large")
-        language: Optional language code (auto-detect if None)
-
-    Returns:
-        {
-            "transcript": str,
-            "segments": [{id, start, end, text}, ...],
-            "words": [{word, start, end, confidence}, ...],
-            "duration": float,
-            "language": str,
-        }
-    """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"File not found: {video_path}")
 
-    # Load Faster Whisper model (CPU only to avoid CUDA library issues)
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+    # Load Whisper model (auto-detects GPU/CPU)
+    model = whisper.load_model(model_size)
+    
+    # Log device info
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute = "float16" if device == "cuda" else "float32"
+    print(f"[WHISPER] Using device: {device}, compute: {compute}, model: {model_size}")
 
     # Transcribe with word timestamps
-    segments, info = model.transcribe(
+    result = model.transcribe(
         video_path,
         language=language,
         word_timestamps=True,
-        vad_filter=True,  # Voice activity detection for cleaner segments
+        verbose=False,
     )
 
     # Extract segment and word data
     segments_data = []
     words_data = []
 
-    for seg in segments:
+    for seg in result.get("segments", []):
         segments_data.append({
-            "id": seg.id,
-            "start": round(seg.start, 3),
-            "end": round(seg.end, 3),
-            "text": seg.text.strip(),
+            "id": seg.get("id"),
+            "start": round(seg.get("start", 0), 3),
+            "end": round(seg.get("end", 0), 3),
+            "text": seg.get("text", "").strip(),
         })
 
         # Extract word-level timestamps
-        if seg.words:
-            for word in seg.words:
+        seg_words = seg.get("words", [])
+        if seg_words:
+            for word in seg_words:
                 words_data.append({
-                    "word": word.word.strip(),
-                    "start": round(word.start, 3),
-                    "end": round(word.end, 3),
-                    "confidence": round(word.probability, 3),
+                    "word": word.get("word", "").strip(),
+                    "start": round(word.get("start", 0), 3),
+                    "end": round(word.get("end", 0), 3),
+                    "confidence": round(word.get("probability", 0), 3),
                 })
 
     # Build transcript text
     transcript = " ".join(s["text"] for s in segments_data)
 
-    # Get duration from last segment or info
+    # Get duration from last segment
     duration = 0.0
-    if info.duration:
-        duration = info.duration
-    elif segments_data:
+    if segments_data:
         duration = segments_data[-1]["end"]
 
     # Detect language
-    detected_lang = info.language if info.language else (language or "en")
+    detected_lang = result.get("language", language or "en")
 
-    result = {
+    output = {
         "transcript": transcript,
         "segments": segments_data,
         "words": words_data,
@@ -94,21 +80,18 @@ def transcribe_file(
     }
 
     # Save to /tmp/clipwise/<video_id>/transcript.json
-    _save_transcript(video_path, result)
+    _save_transcript(video_path, output)
 
-    return result
+    return output
 
 
 def _save_transcript(video_path: str, data: dict) -> None:
     """Save transcript JSON to the video's directory."""
-    # Extract video_id from path like /tmp/clipwise/<video_id>/original.mp4
     video_dir = os.path.dirname(video_path)
     video_id = os.path.basename(video_dir)
 
-    # Create directory if needed
     os.makedirs(video_dir, exist_ok=True)
 
-    # Save transcript.json
     transcript_path = os.path.join(video_dir, "transcript.json")
     with open(transcript_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
