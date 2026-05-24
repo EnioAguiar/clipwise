@@ -41,6 +41,7 @@ class ProcessingConfig(BaseModel):
     target_clips: int = Field(default=10, alias="targetClips")
     format: str = "vertical"
     mode: str = "auto"
+    extract_energy: bool = Field(default=True, alias="extractEnergy")
 
 class Moment(BaseModel):
     rank: int
@@ -254,9 +255,9 @@ async def extract_video(req: ProcessRequest):
             transcribe_file(video_path)
             logger.warning(f"[EXTRACT] Transcription complete")
 
-        # Step 2: Extract energy
+        # Step 2: Extract energy (optional)
         energy_path = f"/tmp/clipwise/{video_id}/energy.json"
-        if not os.path.exists(energy_path):
+        if req.config.extract_energy and not os.path.exists(energy_path):
             logger.warning(f"[EXTRACT] Starting energy extraction...")
             energy_profile = get_energy_profile(video_path)
             save_energy_data(video_id, energy_profile["energy_data"], energy_profile["segment_scores"], energy_profile["peak_times"])
@@ -316,10 +317,10 @@ async def process_video(req: ProcessRequest):
             transcribe_file(video_path)
             logger.warning(f"[PROCESS] Transcription complete")
 
-        # Step 3: Extract energy (if not already done)
+        # Step 3: Extract energy (optional, only used for fallback if Gemini fails)
         energy_path = f"/tmp/clipwise/{video_id}/energy.json"
         logger.warning(f"[PROCESS] Checking energy at {energy_path}, exists={os.path.exists(energy_path)}")
-        if not os.path.exists(energy_path):
+        if req.config.extract_energy and not os.path.exists(energy_path):
             logger.warning(f"[PROCESS] Starting energy extraction...")
             energy_profile = get_energy_profile(video_path)
             save_energy_data(video_id, energy_profile["energy_data"], energy_profile["segment_scores"], energy_profile["peak_times"])
