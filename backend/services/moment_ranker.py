@@ -63,7 +63,7 @@ def rank_moments(
     if use_llm:
         try:
             print(f"[RANK] Starting moment ranking with config: {config}")
-            result = call_gemini_moment_selection(transcript_data, energy_data, config)
+            result = call_gemini_moment_selection(transcript_data, config)
             raw_count = len(result.get("moments", []))
             print(f"[RANK] Gemini returned {raw_count} raw moments")
             # Post-process: filter by span, sort by score

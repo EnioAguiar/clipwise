@@ -6,6 +6,7 @@ Falls back to energy-only scoring if API fails.
 """
 
 import json
+import math
 import os
 import requests
 
@@ -16,19 +17,16 @@ GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_M
 
 def call_gemini_moment_selection(
     transcript_data: dict,
-    energy_data: list[dict],
     config: dict,
 ) -> dict:
     """
-    Send transcript + energy to Gemini for moment selection.
+    Send transcript to Gemini for moment selection.
     
     For long transcripts (>45 min or >180 segments), uses bucketing strategy
     to avoid timeout and token limits.
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not set — cannot call Gemini API")
-
-    prompt = _build_moment_prompt(transcript_data, energy_data, config)
     
     print(f"[GEMINI] Sending request with config: min={config.get('min_clip_duration', 30)}, max={config.get('max_clip_duration', 60)}, target={config.get('target_clips', 10)}")
 
@@ -39,15 +37,15 @@ def call_gemini_moment_selection(
     
     if use_bucketing:
         print(f"[GEMINI] Long transcript detected (duration={duration:.0f}s, segments={len(segments)}). Using bucketing strategy.")
-        return _call_gemini_with_buckets(transcript_data, energy_data, config)
+        return _call_gemini_with_buckets(transcript_data, config)
     
     # Single call for shorter transcripts
-    return _call_gemini_single(prompt, config)
+    return _call_gemini_single(transcript_data, config)
 
 
-def _call_gemini_single(transcript_data: dict, energy_data: list[dict], config: dict) -> dict:
+def _call_gemini_single(transcript_data: dict, config: dict) -> dict:
     """Single Gemini API call for regular transcripts."""
-    prompt = _build_moment_prompt(transcript_data, energy_data, config)
+    prompt = _build_moment_prompt(transcript_data, config)
     
     headers = {
         "x-goog-api-key": GEMINI_API_KEY,
@@ -95,9 +93,9 @@ def _call_gemini_single(transcript_data: dict, energy_data: list[dict], config: 
         raise RuntimeError(f"Gemini API failed: {e}") from e
 
 
-def _call_gemini_with_buckets(transcript_data: dict, energy_data: list[dict], config: dict) -> dict:
+def _call_gemini_with_buckets(transcript_data: dict, config: dict) -> dict:
     """
-    Process long transcripts by dividing into buckets.
+    Process long transcripts by dividing into buckets (like podcli).
     
     Each bucket is processed separately to avoid timeout.
     Results are aggregated and deduplicated.
@@ -109,8 +107,8 @@ def _call_gemini_with_buckets(transcript_data: dict, energy_data: list[dict], co
     duration = transcript_data.get("duration", 0)
     segments = transcript_data.get("segments", [])
     
-    # Create buckets (3-6 based on duration)
-    bucket_count = min(6, max(3, int(duration / 600)))  # one bucket per ~10 min
+    # Create buckets (3-6 based on duration) - like podcli: ~25 min per bucket
+    bucket_count = min(6, max(3, math.ceil(duration / 1500)))  # 25 min per bucket
     bucket_size = duration / bucket_count
     
     print(f"[GEMINI] Creating {bucket_count} buckets (~{bucket_size/60:.0f} min each)")
@@ -135,9 +133,6 @@ def _call_gemini_with_buckets(transcript_data: dict, energy_data: list[dict], co
             "transcript": " ".join(s.get("text", "") for s in bucket_segments)
         }
         
-        # Create energy data for this bucket
-        bucket_energy = [e for e in energy_data if bucket_start <= e.get("time", 0) < bucket_end]
-        
         print(f"[GEMINI] Bucket {idx+1}/{bucket_count}: {int(bucket_start//60)}:{int(bucket_start%60):02d}-{int(bucket_end//60)}:{int(bucket_end%60):02d} ({len(bucket_segments)} segments)")
         
         # Build prompt for bucket (smaller target per bucket)
@@ -145,7 +140,7 @@ def _call_gemini_with_buckets(transcript_data: dict, energy_data: list[dict], co
         bucket_config = config.copy()
         bucket_config["target_clips"] = bucket_target
         
-        prompt = _build_moment_prompt(bucket_transcript, bucket_energy, bucket_config)
+        prompt = _build_moment_prompt(bucket_transcript, bucket_config)
         
         headers = {
             "x-goog-api-key": GEMINI_API_KEY,
@@ -154,7 +149,7 @@ def _call_gemini_with_buckets(transcript_data: dict, energy_data: list[dict], co
         body = {"contents": [{"parts": [{"text": prompt}]}]}
         
         try:
-            response = requests.post(GEMINI_URL, headers=headers, json=body, timeout=120)
+            response = requests.post(GEMINI_URL, headers=headers, json=body, timeout=180)
             response.raise_for_status()
             result = response.json()
             
@@ -177,37 +172,29 @@ def _call_gemini_with_buckets(transcript_data: dict, energy_data: list[dict], co
     return {"moments": all_moments}
 
 
-def _build_moment_prompt(transcript_data: dict, energy_data: list[dict], config: dict) -> str:
+def _build_moment_prompt(transcript_data: dict, config: dict) -> str:
     """
-    Build the moment selection prompt (same as Groq version).
-
-    Duration rules (CRITICAL):
-    - Target: {min}-{max} seconds (this is the viral sweet spot)
-    - Maximum: {max} seconds (absolute hard limit — clips longer will be rejected)
-    - Minimum: {min} seconds (too short = no payoff, will be rejected)
-    - SHORTER IS BETTER. A punchy 25s clip outperforms a 40s clip every time.
+    Build the moment selection prompt (like podcli).
     """
     min_dur = config.get("min_clip_duration", 30)
     max_dur = config.get("max_clip_duration", 60)
     target = config.get("target_clips", 10)
-    target_dur = min_dur
 
     transcript_md = _pack_transcript_for_prompt(transcript_data)
-    energy_md = _pack_energy_for_prompt(energy_data)
+    segment_count = len(transcript_data.get("segments", []))
+    duration_min = transcript_data.get("duration", 0) / 60
 
-    return f"""You are a viral clip editor for TikTok and YouTube Shorts. Find the {target * 5} most scroll-stopping moments in this video transcript.
+    return f"""You are a viral clip editor for TikTok and YouTube Shorts. Find the {target} most scroll-stopping moments in this video transcript.
 
 IMPORTANT: Return ONLY valid JSON. No markdown, no explanation, no code fences.
-
-IMPORTANT: Generate MORE candidates than you need — {target * 5} moments. The filter will validate span duration.
 
 TIMESTAMP FORMAT: All timestamps in the transcript are in SECONDS (e.g., [123.4s]).
 All timestamps you return MUST be in SECONDS as numbers (e.g., 123.4), NOT minutes:seconds.
 
 DURATION RULES (CRITICAL):
-- Target: {target_dur}-{max_dur} seconds (this is the viral sweet spot)
-- Maximum: {max_dur} seconds (absolute hard limit — clips longer will be REJECTED)
-- Minimum: {min_dur} seconds (too short = no payoff, will be REJECTED)
+- Target: {min_dur}-{max_dur} seconds (this is the viral sweet spot)
+- Maximum: {max_dur} seconds (absolute hard limit — anything longer WILL FAIL)
+- Minimum: {min_dur} seconds (too short = no payoff)
 - SHORTER IS BETTER. A punchy 25s clip outperforms a 40s clip every time.
 - If a thought takes longer than {max_dur}s, use segments to cut the filler in the middle
 
@@ -231,15 +218,10 @@ MOMENT SELECTION (think like a TikTok editor):
 - Search the ENTIRE timeline and diversify the picks. Do not cluster all clips in one section.
 
 Score each moment on 4 dimensions (1-5 each):
-- hook: Grabs attention in first 3 seconds? (1=weak, 5=strong)
-- standalone: Makes sense without episode context? (1=needs context, 5=standalone)
-- relevance: Matters to target audience? (1=irrelevant, 5=highly relevant)
-- quotability: Memorable, shareable phrasing? (1=forgettable, 5=shareable)
-
-SCORE CALCULATION (IMPORTANT):
-- total_score = hook + standalone + relevance + quotability
-- Maximum possible total_score = 20 (4 dimensions × 5 max each)
-- Example: scores={{"hook": 5, "standalone": 4, "relevance": 4, "quotability": 3}} → total_score=16
+- hook: Grabs attention in first 3 seconds?
+- standalone: Makes sense without episode context?
+- relevance: Matters to target audience?
+- quotability: Memorable, shareable phrasing?
 
 Classify each as: guest_story | technical_insight | hot_take | market_landscape | business_strategy
 
@@ -247,14 +229,15 @@ Return this exact JSON structure:
 {{
   "moments": [
     {{
+      "title": "First strong sentence from the moment",
       "start": 123.4,
       "end": 168.4,
-      "duration": 45,
+      "duration": 40,
+      "content_type": "guest_story",
+      "scores": {{"hook": 4, "standalone": 5, "relevance": 4, "quotability": 3}},
       "total_score": 16,
-      "scores": {{"hook": 5, "standalone": 4, "relevance": 4, "quotability": 3}},
       "transcript_snippet": "The key quote from this moment",
-      "segments": [{{"start": 123.4, "end": 140.0}}, {{"start": 145.2, "end": 168.4}}],
-      "content_type": "guest_story"
+      "segments": [{{"start": 123.4, "end": 140.0}}, {{"start": 145.2, "end": 168.4}}]
     }}
   ]
 }}
@@ -271,22 +254,18 @@ IMPORTANT - SPAN VALIDATION:
 - The outer bounds (start/end) define what Opus API will receive
 - Your returned "end" minus "start" MUST be {min_dur}-{max_dur} seconds
 - If you use segments to skip filler, the span will be larger than duration
-- Example: if start=100, end=200, but segments are only 80s total → SPAN=100s > max={max_dur}s → REJECTED
-- Solution: if you use segments, adjust start/end to be close to segment sum
-- OR: use a single segment that covers the full moment without internal gaps
+- Solution: adjust start/end to be close to segment sum, or use single segment
 
 Rules:
-- Final clip duration (sum of segments) MUST be {min_dur}-{max_dur} seconds (target {target_dur}-{max_dur}s)
+- Final clip duration (sum of segments) MUST be {min_dur}-{max_dur} seconds
 - Each segment must start and end on COMPLETE SENTENCES — never mid-thought
 - The LAST segment must end on a sentence that feels like a natural conclusion
 - Must make sense standalone when stitched together
 - Sort clips by timestamp order
 
-Transcript:
-{transcript_md}
+Transcript ({segment_count} segments, ~{duration_min:.0f} min):
 
-Energy Peaks (top 20 loudest moments):
-{energy_md}
+{transcript_md}
 
 Return JSON only — no markdown, no explanation."""
 
