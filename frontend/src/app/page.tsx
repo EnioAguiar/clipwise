@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
-import { Upload, Settings, Play, Download, X, AlertCircle, CheckCircle2, Copy } from 'lucide-react'
+import { Upload, Settings, Play, Download, X, AlertCircle, CheckCircle2, Copy, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ConfigPanel, DEFAULT_CONFIG, type ProcessingConfig } from '@/components/ConfigPanel'
 import { Button } from '@/components/ui/button'
@@ -251,6 +251,7 @@ export default function Home() {
           source: activeTab === 'youtube' ? 'youtube' : 'upload',
           file_id: videoId,
           youtube_url: activeTab === 'youtube' ? youtubeUrl : '',
+          config: { extractEnergy: config.extractEnergy }
         })
       })
 
@@ -402,6 +403,43 @@ export default function Home() {
                 {error}
               </div>
             )}
+
+            {/* Energy Extraction Option */}
+            <div className="mt-4 space-y-2">
+              <label className="text-sm text-gray-400 flex items-center gap-2">
+                <Zap className="w-4 h-4" />
+                Extrair energia de áudio
+              </label>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setConfig(prev => ({ ...prev, extractEnergy: false }))}
+                  className={cn(
+                    'px-4 py-2 rounded-lg border transition-colors text-sm',
+                    !config.extractEnergy
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-gray-600 text-gray-400 hover:border-gray-500'
+                  )}
+                >
+                  Off
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfig(prev => ({ ...prev, extractEnergy: true }))}
+                  className={cn(
+                    'px-4 py-2 rounded-lg border transition-colors text-sm',
+                    config.extractEnergy
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-gray-600 text-gray-400 hover:border-gray-500'
+                  )}
+                >
+                  On
+                </button>
+                <span className="text-xs text-gray-500">
+                  {config.extractEnergy ? 'Com fallback de energia' : 'Mais rápido, sem fallback'}
+                </span>
+              </div>
+            </div>
 
             {/* Transcribe Button */}
             <div className="mt-6 flex justify-end">
