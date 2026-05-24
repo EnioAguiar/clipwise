@@ -1,6 +1,6 @@
 'use client'
 
-import { Settings } from 'lucide-react'
+import { Settings, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Slider } from '@/components/ui/slider'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ export interface ProcessingConfig {
   targetClips: number    // range 3-20, default 10
   format: 'vertical' | 'square'  // 9:16 or 1:1
   mode: 'auto' | 'manual'        // auto = top moments, manual = user reviews
+  extractEnergy: boolean         // extract audio energy data (for fallback)
 }
 
 interface ConfigPanelProps {
@@ -25,6 +26,7 @@ const DEFAULT_CONFIG: ProcessingConfig = {
   targetClips: 10,
   format: 'vertical',
   mode: 'auto',
+  extractEnergy: true,
 }
 
 export function ConfigPanel({ config, onConfigChange, disabled }: ConfigPanelProps) {
@@ -153,6 +155,47 @@ export function ConfigPanel({ config, onConfigChange, disabled }: ConfigPanelPro
         </div>
         <p className="text-xs text-gray-500">
           {config.mode === 'auto' ? 'Melhores momentos são selecionados automaticamente' : 'Você revisa cada clip antes de processar'}
+        </p>
+      </div>
+
+      {/* Energy Extraction Toggle */}
+      <div className="space-y-2">
+        <label className="text-sm text-gray-400 flex items-center gap-2">
+          <Zap className="w-4 h-4" />
+          Extrair energia de áudio
+        </label>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => updateConfig('extractEnergy', false)}
+            disabled={disabled}
+            className={cn(
+              'px-4 py-2 rounded-lg border transition-colors',
+              !config.extractEnergy
+                ? 'bg-blue-600 border-blue-600 text-white'
+                : 'border-gray-600 text-gray-400 hover:border-gray-500'
+            )}
+          >
+            Off
+          </button>
+          <button
+            type="button"
+            onClick={() => updateConfig('extractEnergy', true)}
+            disabled={disabled}
+            className={cn(
+              'px-4 py-2 rounded-lg border transition-colors',
+              config.extractEnergy
+                ? 'bg-blue-600 border-blue-600 text-white'
+                : 'border-gray-600 text-gray-400 hover:border-gray-500'
+            )}
+          >
+            On
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">
+          {config.extractEnergy
+            ? 'Energia é extraída para fallback se Gemini falhar (mais lento)'
+            : 'Pula extração de energia — mais rápido, sem fallback'}
         </p>
       </div>
     </div>
