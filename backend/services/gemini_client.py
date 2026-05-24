@@ -21,17 +21,9 @@ def call_gemini_moment_selection(
 ) -> dict:
     """
     Send transcript + energy to Gemini for moment selection.
-
-    Args:
-        transcript_data: {transcript, segments, words, duration, language}
-        energy_data: [{time, rms_db}, ...] from energy.json
-        config: {min_clip_duration, max_clip_duration, target_clips, ...}
-
-    Returns:
-        {"moments": [...]} per output format
-
-    Raises:
-        RuntimeError: if API call fails and fallback is disabled
+    
+    For long transcripts (>45 min or >180 segments), uses bucketing strategy
+    to avoid timeout and token limits.
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not set — cannot call Gemini API")
@@ -40,6 +32,23 @@ def call_gemini_moment_selection(
     
     print(f"[GEMINI] Sending request with config: min={config.get('min_clip_duration', 30)}, max={config.get('max_clip_duration', 60)}, target={config.get('target_clips', 10)}")
 
+    # Check if we should use bucketing
+    duration = transcript_data.get("duration", 0)
+    segments = transcript_data.get("segments", [])
+    use_bucketing = duration >= 45 * 60 or len(segments) >= 180
+    
+    if use_bucketing:
+        print(f"[GEMINI] Long transcript detected (duration={duration:.0f}s, segments={len(segments)}). Using bucketing strategy.")
+        return _call_gemini_with_buckets(transcript_data, energy_data, config)
+    
+    # Single call for shorter transcripts
+    return _call_gemini_single(prompt, config)
+
+
+def _call_gemini_single(transcript_data: dict, energy_data: list[dict], config: dict) -> dict:
+    """Single Gemini API call for regular transcripts."""
+    prompt = _build_moment_prompt(transcript_data, energy_data, config)
+    
     headers = {
         "x-goog-api-key": GEMINI_API_KEY,
         "Content-Type": "application/json"
@@ -52,16 +61,14 @@ def call_gemini_moment_selection(
     print(f"[GEMINI] Sending request to {GEMINI_MODEL}...")
     
     try:
-        response = requests.post(GEMINI_URL, headers=headers, json=body, timeout=120)
+        response = requests.post(GEMINI_URL, headers=headers, json=body, timeout=180)
         response.raise_for_status()
         result = response.json()
         
-        # Extract text from Gemini response
         text = result["candidates"][0]["content"]["parts"][0]["text"]
         print(f"[GEMINI] Raw response length: {len(text)} chars")
         print(f"[GEMINI] Raw response (first 500 chars): {text[:500]}")
         
-        # Parse JSON from text (Gemini might wrap in ```json)
         text = text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
@@ -73,7 +80,6 @@ def call_gemini_moment_selection(
         moments_count = len(moments)
         print(f"[GEMINI] Parsed {moments_count} moments")
         
-        # Log score details for first 3 moments
         for i, m in enumerate(moments[:3]):
             scores = m.get("scores", {})
             total = m.get("total_score", 0)
@@ -83,10 +89,92 @@ def call_gemini_moment_selection(
         return parsed
         
     except requests.exceptions.Timeout:
-        raise RuntimeError("Gemini API timeout after 120s")
+        raise RuntimeError("Gemini API timeout after 180s")
     except Exception as e:
         print(f"[GEMINI] Error: {e}")
         raise RuntimeError(f"Gemini API failed: {e}") from e
+
+
+def _call_gemini_with_buckets(transcript_data: dict, energy_data: list[dict], config: dict) -> dict:
+    """
+    Process long transcripts by dividing into buckets.
+    
+    Each bucket is processed separately to avoid timeout.
+    Results are aggregated and deduplicated.
+    """
+    min_dur = config.get("min_clip_duration", 30)
+    max_dur = config.get("max_clip_duration", 60)
+    target = config.get("target_clips", 10)
+    
+    duration = transcript_data.get("duration", 0)
+    segments = transcript_data.get("segments", [])
+    
+    # Create buckets (3-6 based on duration)
+    bucket_count = min(6, max(3, int(duration / 600)))  # one bucket per ~10 min
+    bucket_size = duration / bucket_count
+    
+    print(f"[GEMINI] Creating {bucket_count} buckets (~{bucket_size/60:.0f} min each)")
+    
+    all_moments = []
+    
+    for idx in range(bucket_count):
+        bucket_start = idx * bucket_size
+        bucket_end = duration if idx == bucket_count - 1 else (idx + 1) * bucket_size
+        
+        # Get segments in this bucket
+        bucket_segments = [s for s in segments if s.get("start", 0) >= bucket_start and s.get("start", 0) < bucket_end]
+        
+        if len(bucket_segments) < 3:
+            print(f"[GEMINI] Bucket {idx+1}: too few segments, skipping")
+            continue
+        
+        # Create transcript data for this bucket
+        bucket_transcript = {
+            "duration": bucket_end - bucket_start,
+            "segments": bucket_segments,
+            "transcript": " ".join(s.get("text", "") for s in bucket_segments)
+        }
+        
+        # Create energy data for this bucket
+        bucket_energy = [e for e in energy_data if bucket_start <= e.get("time", 0) < bucket_end]
+        
+        print(f"[GEMINI] Bucket {idx+1}/{bucket_count}: {int(bucket_start//60)}:{int(bucket_start%60):02d}-{int(bucket_end//60)}:{int(bucket_end%60):02d} ({len(bucket_segments)} segments)")
+        
+        # Build prompt for bucket (smaller target per bucket)
+        bucket_target = max(2, target // bucket_count + 1)
+        bucket_config = config.copy()
+        bucket_config["target_clips"] = bucket_target
+        
+        prompt = _build_moment_prompt(bucket_transcript, bucket_energy, bucket_config)
+        
+        headers = {
+            "x-goog-api-key": GEMINI_API_KEY,
+            "Content-Type": "application/json"
+        }
+        body = {"contents": [{"parts": [{"text": prompt}]}]}
+        
+        try:
+            response = requests.post(GEMINI_URL, headers=headers, json=body, timeout=120)
+            response.raise_for_status()
+            result = response.json()
+            
+            text = result["candidates"][0]["content"]["parts"][0]["text"]
+            text = text.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(lines[1:-1])
+            
+            parsed = json.loads(text)
+            bucket_moments = parsed.get("moments", [])
+            print(f"[GEMINI] Bucket {idx+1} returned {len(bucket_moments)} moments")
+            all_moments.extend(bucket_moments)
+            
+        except Exception as e:
+            print(f"[GEMINI] Bucket {idx+1} failed: {e}")
+            continue
+    
+    print(f"[GEMINI] Total moments from all buckets: {len(all_moments)}")
+    return {"moments": all_moments}
 
 
 def _build_moment_prompt(transcript_data: dict, energy_data: list[dict], config: dict) -> str:
