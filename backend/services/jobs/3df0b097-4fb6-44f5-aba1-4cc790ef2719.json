@@ -1,0 +1,13 @@
+{
+  "video_id": "3df0b097-4fb6-44f5-aba1-4cc790ef2719",
+  "status": "ranking",
+  "progress": 70,
+  "current_step": "Analisando com IA...",
+  "started_at": "2026-05-24T18:29:16.853252",
+  "updated_at": "2026-05-24T18:30:38.388957",
+  "error": null,
+  "config": {
+    "extract_energy": false
+  },
+  "result": null
+}
