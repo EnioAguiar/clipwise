@@ -426,6 +426,23 @@ async def complete_opus_upload(video_id: str, upload_id: str):
     return {"status": "complete", "video_id": video_id}
 
 
+@app.post("/opus/store-youtube")
+async def store_youtube_url(video_id: str, youtube_url: str):
+    """
+    Store YouTube URL for a video so it can be sent to Opus directly.
+    """
+    from services.storage import update_video_metadata
+    
+    update_video_metadata(video_id, youtube_url=youtube_url)
+    
+    if video_id not in opus_upload_state:
+        opus_upload_state[video_id] = {}
+    opus_upload_state[video_id]["youtube_url"] = youtube_url
+    opus_upload_state[video_id]["complete"] = True  # YouTube doesn't need upload
+    
+    return {"status": "stored", "video_id": video_id}
+
+
 @app.post("/opus/send-moments")
 async def send_moments_to_opus(req: OpusSendRequest):
     """

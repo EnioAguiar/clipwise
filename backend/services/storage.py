@@ -118,6 +118,15 @@ def get_video_info(file_id: str) -> Optional[dict]:
     return _video_metadata.get(file_id)
 
 
+def update_video_metadata(file_id: str, **kwargs) -> None:
+    """
+    Update metadata fields for an existing video.
+    Used to add youtube_url or other fields after initial save.
+    """
+    if file_id in _video_metadata:
+        _video_metadata[file_id].update(kwargs)
+
+
 def _get_duration(file_path: str) -> float:
     """Get video/audio duration in seconds using ffprobe."""
     cmd = [
