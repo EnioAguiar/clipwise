@@ -372,30 +372,151 @@ async def get_moments(video_id: str):
 
 class OpusSendRequest(BaseModel):
     video_id: str
-    moments: list[dict]  # [{start: float, end: float}, ...]
+    moments: list[dict]  # [{start: float, end: float, duration: float}, ...]
+    use_youtube: bool = False
+
+
+# In-memory state for opus upload tracking
+opus_upload_state: dict[str, dict] = {}
+
+
+@app.post("/opus/upload-link")
+async def get_opus_upload_link(video_id: str, filename: str):
+    """
+    Step 1: Get a resumable upload URL for a video file.
+    POST /api/upload-links → returns upload_id and url
+    """
+    opus_api_key = os.getenv("OPUS_API_KEY")
+    if not opus_api_key:
+        raise HTTPException(status_code=500, detail="OPUS_API_KEY not configured in .env")
+    
+    from services.opus_client import OpusClient
+    client = OpusClient(opus_api_key)
+    
+    result = await client.get_upload_link()
+    
+    # Store upload state
+    opus_upload_state[video_id] = {
+        "upload_id": result["upload_id"],
+        "url": result["url"],
+        "filename": filename,
+        "complete": False
+    }
+    
+    return {
+        "upload_id": result["upload_id"],
+        "url": result["url"]
+    }
+
+
+@app.post("/opus/upload-complete")
+async def complete_opus_upload(video_id: str, upload_id: str):
+    """
+    Step 2: Confirm that the video upload to Opus is complete.
+    After this, timestamps can be sent.
+    """
+    if video_id not in opus_upload_state:
+        raise HTTPException(status_code=404, detail="No upload in progress for this video_id")
+    
+    if opus_upload_state[video_id]["upload_id"] != upload_id:
+        raise HTTPException(status_code=400, detail="upload_id mismatch")
+    
+    opus_upload_state[video_id]["complete"] = True
+    
+    return {"status": "complete", "video_id": video_id}
+
+
+@app.post("/opus/send-moments")
+async def send_moments_to_opus(req: OpusSendRequest):
+    """
+    Send moments to Opus Clip API.
+    
+    For YouTube videos (use_youtube=True): send directly with video_url
+    For uploaded videos: use the upload_id from the upload step
+    """
+    opus_api_key = os.getenv("OPUS_API_KEY")
+    if not opus_api_key:
+        raise HTTPException(status_code=500, detail="OPUS_API_KEY not configured in .env")
+    
+    from services.opus_client import OpusClient
+    client = OpusClient(opus_api_key)
+    
+    # Convert moments to timestamps
+    timestamps = [{"start": m["start"], "end": m["end"]} for m in req.moments]
+    
+    if req.use_youtube:
+        # YouTube video - use direct URL
+        info = get_video_info(req.video_id)
+        if not info:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        video_url = info.get("youtube_url")
+        if not video_url:
+            raise HTTPException(status_code=400, detail="No YouTube URL for this video")
+        
+        result = await client.create_clip_project_from_url(video_url, timestamps)
+    else:
+        # Uploaded video - use upload_id
+        if req.video_id not in opus_upload_state:
+            raise HTTPException(status_code=400, detail="Video not uploaded yet. Call /opus/upload-link first.")
+        
+        upload_data = opus_upload_state[req.video_id]
+        if not upload_data.get("complete"):
+            raise HTTPException(status_code=400, detail="Video upload not complete. Call /opus/upload-complete first.")
+        
+        upload_id = upload_data["upload_id"]
+        result = await client.create_clip_project(upload_id, timestamps)
+    
+    # Store job_id for polling
+    project_id = result.get("id") or result.get("projectId") or result.get("jobId")
+    opus_upload_state[req.video_id]["project_id"] = project_id
+    opus_upload_state[req.video_id]["moments_sent"] = len(req.moments)
+    
+    return {
+        "status": "sent",
+        "project_id": project_id,
+        "moments_count": len(req.moments)
+    }
+
+
+@app.get("/opus/status/{project_id}")
+async def get_opus_clip_status(project_id: str):
+    """
+    Poll for clip generation status.
+    """
+    opus_api_key = os.getenv("OPUS_API_KEY")
+    if not opus_api_key:
+        raise HTTPException(status_code=500, detail="OPUS_API_KEY not configured in .env")
+    
+    from services.opus_client import OpusClient
+    client = OpusClient(opus_api_key)
+    
+    status = await client.get_project_status(project_id)
+    
+    return {
+        "project_id": project_id,
+        "status": status.get("status"),
+        "clips": status.get("clips", [])
+    }
 
 
 @app.post("/opus/send")
 async def send_to_opus(req: OpusSendRequest):
     """
-    Send selected moments to Opus Clip API.
+    Send selected moments to Opus Clip API (legacy endpoint for compatibility).
     Returns job ID for polling status.
     """
     opus_api_key = os.getenv("OPUS_API_KEY")
     if not opus_api_key:
         raise HTTPException(status_code=500, detail="OPUS_API_KEY not configured in .env")
 
-    # Get video info to get the file path
     info = get_video_info(req.video_id)
     if not info:
         raise HTTPException(status_code=404, detail="Video not found")
 
     video_path = info["path"]
-
-    # Format timestamps for Opus API
     timestamps = [{"start": m["start"], "end": m["end"]} for m in req.moments]
 
-    # Call Opus Clip API
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.opus.clip/v1/clips",
