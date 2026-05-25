@@ -107,8 +107,8 @@
 - Example: 60-min live, find 10 best moments (30-60s each) = ~10 credits vs 60 credits if processed whole
 
 **Plans:**
-- `plan-4.1`: Opus Clip API client + authentication
-- `plan-4.2`: Clip generation, polling, and download workflow
+- [ ] `04-01-PLAN.md` — Opus Clip API client + video upload workflow (Wave 1)
+- [ ] `04-02-PLAN.md` — Timestamp verification + sending + clip polling (Wave 2)
 
 ---
 
